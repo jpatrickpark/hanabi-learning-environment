@@ -37,6 +37,7 @@ import rl_env
 import numpy as np
 import rainbow_agent
 import tensorflow as tf
+import sys
 
 LENIENT_SCORE = False
 
@@ -144,6 +145,7 @@ def create_obs_stacker(environment, history_size=4):
                             environment.vectorized_observation_shape()[0],
                             environment.players)
 
+#new_action_size = 0 # JP
 
 @gin.configurable
 def create_agent(environment, obs_stacker, agent_type='DQN'):
@@ -160,14 +162,15 @@ def create_agent(environment, obs_stacker, agent_type='DQN'):
   Raises:
     ValueError: if an unknown agent type is requested.
   """
+  # new_action_size = environment.num_moves() - environment.players*environment.hand_size # deprecated
   if agent_type == 'DQN':
     return dqn_agent.DQNAgent(observation_size=obs_stacker.observation_size(),
-                              num_actions=environment.num_moves(),
+                              num_actions=environment.num_moves(), # JP
                               num_players=environment.players)
   elif agent_type == 'Rainbow':
     return rainbow_agent.RainbowAgent(
         observation_size=obs_stacker.observation_size(),
-        num_actions=environment.num_moves(),
+        num_actions=environment.num_moves(), # JP
         num_players=environment.players)
   else:
     raise ValueError('Expected valid agent_type, got {}'.format(agent_type))
@@ -226,7 +229,7 @@ def initialize_checkpointing(agent, experiment_logger, checkpoint_dir,
   return start_iteration, experiment_checkpointer
 
 
-def format_legal_moves(legal_moves, action_dim):
+def format_legal_moves(legal_moves, action_dim, opponent_hands): # JP
   """Returns formatted legal moves.
 
   This function takes a list of actions and converts it into a fixed size vector
@@ -243,8 +246,27 @@ def format_legal_moves(legal_moves, action_dim):
     a vector of size action_dim.
   """
   new_legal_moves = np.full(action_dim, -float('inf'))
-  if legal_moves:
-    new_legal_moves[legal_moves] = 0
+  legal_moves = np.array(legal_moves) # JP
+
+  # take care of the first 10 values (discard, play bits)
+  legal_moves_for_discard_and_play = legal_moves[legal_moves<10]
+  legal_moves_for_hints = legal_moves[legal_moves>=10]
+  if legal_moves_for_discard_and_play.any():
+    new_legal_moves[:10][legal_moves_for_discard_and_play] = 0
+
+  # take care of the rest. Unless they are all unplayable (hint token 0), set them all to playable. 
+  if legal_moves_for_hints.any():
+    new_legal_moves[10:] = 0 # Broadcast, should work 
+  
+  # Hinting for a missing hand is not a legal move!
+  # This is probably only safe for standard game with 2 players.
+  if len(opponent_hands) < 5:
+    num_missing_hands = 5 - len(opponent_hands)
+    for i in range(num_missing_hands):
+      current_card_index = 4 - i
+      new_legal_moves[10 + current_card_index] = -float('inf')
+      new_legal_moves[15 + current_card_index] = -float('inf')
+
   return new_legal_moves
 
 
@@ -267,8 +289,10 @@ def parse_observations(observations, num_actions, obs_stacker):
   current_player_observation = (
       observations['player_observations'][current_player])
 
+  opponent_hand = current_player_observation['observed_hands'][1] #JP
+
   legal_moves = current_player_observation['legal_moves_as_int']
-  legal_moves = format_legal_moves(legal_moves, num_actions)
+  legal_moves = format_legal_moves(legal_moves, num_actions, opponent_hand) #JP
 
   observation_vector = current_player_observation['vectorized']
   obs_stacker.add_observation(observation_vector, current_player)
@@ -276,6 +300,20 @@ def parse_observations(observations, num_actions, obs_stacker):
 
   return current_player, legal_moves, observation_vector
 
+def color_to_idx(color):
+  color_array = ['R', 'Y', 'G', 'W', 'B']
+  return color_array.index(color)
+
+def decode_action_in_card_space_to_hint_space(action, opponent_hand): # JP
+  '''temporarily only works with 2 player standard game'''
+  if action < 10:
+    return action
+  #opponent_hand = current_player_observation['observed_hands'][1]
+  if action < 15:
+    color = opponent_hand[action-10]['color']
+    return 10 + color_to_idx(color)
+  card_rank = opponent_hand[action-15]['rank']
+  return 15 + card_rank
 
 def run_one_episode(agent, environment, obs_stacker):
   """Runs the agent on a single game of Hanabi in self-play mode.
@@ -293,6 +331,10 @@ def run_one_episode(agent, environment, obs_stacker):
   observations = environment.reset()
   current_player, legal_moves, observation_vector = (
       parse_observations(observations, environment.num_moves(), obs_stacker))
+
+  #np.set_printoptions(threshold=sys.maxsize)
+  #print("observation_vector:", observation_vector)
+
   action = agent.begin_episode(current_player, legal_moves, observation_vector)
 
   is_done = False
@@ -305,7 +347,11 @@ def run_one_episode(agent, environment, obs_stacker):
   reward_since_last_action = np.zeros(environment.players)
 
   while not is_done:
-    observations, reward, is_done, _ = environment.step(action.item())
+    current_player_observation = observations['player_observations'][current_player] #JP
+    opponent_hand = current_player_observation['observed_hands'][1] #JP
+
+    decoded_action = decode_action_in_card_space_to_hint_space(action.item(), opponent_hand) #JP
+    observations, reward, is_done, _ = environment.step(decoded_action)
 
     modified_reward = max(reward, 0) if LENIENT_SCORE else reward
     total_reward += modified_reward
@@ -318,6 +364,7 @@ def run_one_episode(agent, environment, obs_stacker):
     current_player, legal_moves, observation_vector = (
         parse_observations(observations, environment.num_moves(), obs_stacker))
     if current_player in has_played:
+      #print("observation_vector for continuing:", observation_vector)
       action = agent.step(reward_since_last_action[current_player],
                           current_player, legal_moves, observation_vector)
     else:
