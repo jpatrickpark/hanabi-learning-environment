@@ -164,12 +164,12 @@ def create_agent(environment, obs_stacker, agent_type='DQN'):
   """
   # new_action_size = environment.num_moves() - environment.players*environment.hand_size # deprecated
   if agent_type == 'DQN':
-    return dqn_agent.DQNAgent(observation_size=obs_stacker.observation_size(),
+    return dqn_agent.DQNAgent(observation_size=obs_stacker.observation_size() + 5,
                               num_actions=environment.num_moves(), # JP
                               num_players=environment.players)
   elif agent_type == 'Rainbow':
     return rainbow_agent.RainbowAgent(
-        observation_size=obs_stacker.observation_size(),
+        observation_size=obs_stacker.observation_size() + 5,
         num_actions=environment.num_moves(), # JP
         num_players=environment.players)
   else:
@@ -335,7 +335,7 @@ def run_one_episode(agent, environment, obs_stacker):
   #np.set_printoptions(threshold=sys.maxsize)
   #print("observation_vector:", observation_vector)
 
-  action = agent.begin_episode(current_player, legal_moves, observation_vector)
+  action = agent.begin_episode(current_player, legal_moves, np.append(observation_vector, np.zeros(5))) #JP: TODO: append to observation vector
 
   is_done = False
   total_reward = 0
@@ -366,12 +366,12 @@ def run_one_episode(agent, environment, obs_stacker):
     if current_player in has_played:
       #print("observation_vector for continuing:", observation_vector)
       action = agent.step(reward_since_last_action[current_player],
-                          current_player, legal_moves, observation_vector)
+                          current_player, legal_moves, np.append(observation_vector,np.zeros(5))) # JP: TODO: append to observation vector
     else:
       # Each player begins the episode on their first turn (which may not be
       # the first move of the game).
       action = agent.begin_episode(current_player, legal_moves,
-                                   observation_vector)
+                                   np.append(observation_vector,np.zeros(5)))  #JP: TODO: append to observation vector
       has_played.add(current_player)
 
     # Reset this player's reward accumulator.
