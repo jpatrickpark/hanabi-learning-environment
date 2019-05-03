@@ -315,6 +315,10 @@ def decode_action_in_card_space_to_hint_space(action, opponent_hand): # JP
   card_rank = opponent_hand[action-15]['rank']
   return 15 + card_rank
 
+def was_hint(decoded_action):
+  '''should work in all cases of standard game (5 cards in hand)'''
+  return decoded_action >= 10
+
 def run_one_episode(agent, environment, obs_stacker):
   """Runs the agent on a single game of Hanabi in self-play mode.
 
@@ -363,15 +367,27 @@ def run_one_episode(agent, environment, obs_stacker):
       break
     current_player, legal_moves, observation_vector = (
         parse_observations(observations, environment.num_moves(), obs_stacker))
+
+    if was_hint(decoded_action):
+      SoM_vector = np.zeros(5)
+      '''
+      if hint_touched_multiple_cards(decoded_action, current_player_observation):
+        SoM_vector = get_SoM_max_estimates_for_last_hint(agent, reconstructed_observation_vector, reconstructed_legal_moves)
+      else:
+        SoM_vector = last_hinted_card
+      '''
+    else:
+      SoM_vector = np.zeros(5)
+
     if current_player in has_played:
       #print("observation_vector for continuing:", observation_vector)
       action = agent.step(reward_since_last_action[current_player],
-                          current_player, legal_moves, np.append(observation_vector,np.zeros(5))) # JP: TODO: append to observation vector
+                          current_player, legal_moves, np.append(observation_vector, SoM_vector)) # JP: TODO: this should use SoM
     else:
       # Each player begins the episode on their first turn (which may not be
       # the first move of the game).
       action = agent.begin_episode(current_player, legal_moves,
-                                   np.append(observation_vector,np.zeros(5)))  #JP: TODO: append to observation vector
+                                   np.append(observation_vector, SoM_vector))  #JP: TODO: this should use SoM
       has_played.add(current_player)
 
     # Reset this player's reward accumulator.
