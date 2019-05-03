@@ -319,6 +319,12 @@ def was_hint(decoded_action):
   '''should work in all cases of standard game (5 cards in hand)'''
   return decoded_action >= 10
 
+def hinted_cards(observation_vector):
+  '''hint is given, it's the matter of figuring out how many'''
+  touched_cards = observation_vector[-a-5:-a]
+  assert touched_cards.sum() >= 1, "the previous action was hint but no cards were touched." # otherwise it will error in other steps anyways
+  return touched_cards
+
 def run_one_episode(agent, environment, obs_stacker):
   """Runs the agent on a single game of Hanabi in self-play mode.
 
@@ -351,9 +357,11 @@ def run_one_episode(agent, environment, obs_stacker):
   reward_since_last_action = np.zeros(environment.players)
 
   while not is_done:
+    # this "current_player" refers to the very first player
     current_player_observation = observations['player_observations'][current_player] #JP
     opponent_hand = current_player_observation['observed_hands'][1] #JP
 
+    # decode player 1 action using player 2 hand, correct
     decoded_action = decode_action_in_card_space_to_hint_space(action.item(), opponent_hand) #JP
     observations, reward, is_done, _ = environment.step(decoded_action)
 
@@ -365,16 +373,34 @@ def run_one_episode(agent, environment, obs_stacker):
     step_number += 1
     if is_done:
       break
+
     current_player, legal_moves, observation_vector = (
         parse_observations(observations, environment.num_moves(), obs_stacker))
 
+    # player 1 action was hint
     if was_hint(decoded_action):
       SoM_vector = np.zeros(5)
+	  # if player 1 action was hint, how many cards it touched is embedded in player 2's observation vector
       '''
-      if hint_touched_multiple_cards(decoded_action, current_player_observation):
-        SoM_vector = get_SoM_max_estimates_for_last_hint(agent, reconstructed_observation_vector, reconstructed_legal_moves)
-      else:
-        SoM_vector = last_hinted_card
+      my_hinted_cards = hinted_cards(observation_vector)
+      if my_hinted_cards.sum() == 1:
+        SoM_vector = my_hinted_cards
+	  else:
+	    # agent B makes estimates for agent A
+        agent.eval_mode = True
+
+		hint_type = color_or_rank_hint(decoded_action)
+		hinted_cards_in_action_space = (my_hinted_cards, hint_type)
+		reconstructed_observation_vector = # Just use the observation vector of agent 1, but replace the opponent cards with estimates of agent 2
+	    my_previous_intention = #if agent 2's previous action was hint, then use that information about which card it was for ... .
+		estimated_intended_action = agent.begin_episode(
+			1 - current_player, 
+			hinted_cards_in_action_space, 
+			np.append(reconstructed_observation_vector, my_previous_intention)
+		)
+        SoM_vector = decode_intended_action(estimated_intended_action)
+
+        agent.eval_mode = False
       '''
     else:
       SoM_vector = np.zeros(5)
