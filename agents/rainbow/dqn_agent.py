@@ -310,7 +310,6 @@ class DQNAgent(object):
     Returns:
       A legal, int-valued action.
     """
-    self._train_step()
     self.action = self._select_action(observation, legal_actions)
     return self.action
 
