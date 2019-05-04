@@ -299,6 +299,21 @@ class DQNAgent(object):
                             self.action, begin=True)
     return self.action
 
+  def run_inference(self, current_player, legal_actions, observation):
+    """Returns the agent's first action.
+
+    Args:
+      current_player: int, the player whose turn it is.
+      legal_actions: `np.array`, actions which the player can currently take.
+      observation: `np.array`, the environment's initial observation.
+
+    Returns:
+      A legal, int-valued action.
+    """
+    self._train_step()
+    self.action = self._select_action(observation, legal_actions)
+    return self.action
+
   def step(self, reward, current_player, legal_actions, observation):
     """Stores observations from last transition and chooses a new action.
 
