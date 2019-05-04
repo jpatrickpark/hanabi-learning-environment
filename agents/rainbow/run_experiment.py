@@ -460,7 +460,7 @@ def run_one_episode(agent, environment, obs_stacker):
           my_previous_intention = decode_intended_action(action_from_2_moves_ago) #if agent 2's previous action was hint, then use that information about which card it was for ... .
         else:
           my_previous_intention = np.zeros(5)
-        estimated_intended_action = agent.begin_episode(
+        estimated_intended_action = agent.run_inference(
             1 - current_player, 
             legal_hinted_cards_in_modified_action_space, 
             np.append(reconstructed_observation_vector, my_previous_intention)
