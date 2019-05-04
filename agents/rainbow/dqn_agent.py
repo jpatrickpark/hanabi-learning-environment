@@ -85,6 +85,10 @@ def dqn_template(state, num_actions, layer_size=512, num_layers=1):
   return net
 
 
+def one_hot(idx, size):
+  result = np.zeros(size)
+  result[idx] = 1
+  return result
 @gin.configurable
 class DQNAgent(object):
   """A compact implementation of the multiplayer DQN agent."""
@@ -182,7 +186,7 @@ class DQNAgent(object):
       # that make up the state.
       states_shape = (1, observation_size, stack_size)
       self.state = np.zeros(states_shape)
-      self.state_ph = tf.placeholder(tf.uint8, states_shape, name='state_ph')
+      self.state_ph = tf.placeholder(tf.float32, states_shape, name='state_ph') # JP
       self.legal_actions_ph = tf.placeholder(tf.float32,
                                              [self.num_actions],
                                              name='legal_actions_ph')
@@ -196,6 +200,9 @@ class DQNAgent(object):
       self._sync_qt_ops = self._build_sync_op()
 
       self._q_argmax = tf.argmax(self._q + self.legal_actions_ph, axis=1)[0]
+      self.label_ph = tf.placeholder(tf.float32, (1, 20), name='label_ph') # JP
+      self._cross_entropy_loss = tf.nn.softmax_cross_entropy_with_logits_v2(logits = self._q, labels = self.label_ph)
+      self._calculate_gradient = tf.gradients(self._cross_entropy_loss, [self.state_ph])[0]
 
     # Set up a session and initialize variables.
     self._sess = tf.Session(
@@ -310,8 +317,29 @@ class DQNAgent(object):
     Returns:
       A legal, int-valued action.
     """
-    self.action = self._select_action(observation, legal_actions)
-    return self.action
+    return self._select_action(observation, legal_actions)
+
+  def get_som_gradient(self, current_player, legal_actions, observation, ground_truth_action):
+    """Returns the agent's first action.
+
+    Args:
+      current_player: int, the player whose turn it is.
+      legal_actions: `np.array`, actions which the player can currently take.
+      observation: `np.array`, the environment's initial observation.
+
+    Returns:
+      A legal, int-valued action.
+    """
+    action = self._select_action(observation, legal_actions)
+    epsilon = self.epsilon_eval
+    self.state[0, :, 0] = observation
+    
+    gradient = self._sess.run(self._calculate_gradient, 
+                          {self.label_ph: np.expand_dims(one_hot(ground_truth_action,20), axis=0),
+                           self.state_ph: self.state,
+                           self.legal_actions_ph: legal_actions})
+
+    return gradient[0,:,0]
 
   def step(self, reward, current_player, legal_actions, observation):
     """Stores observations from last transition and chooses a new action.
@@ -430,6 +458,7 @@ class DQNAgent(object):
                                self.legal_actions_ph: legal_actions})
       assert legal_actions[action] == 0.0, 'Expected legal action.'
       return action
+
 
   def _train_step(self):
     """Runs a single training step.

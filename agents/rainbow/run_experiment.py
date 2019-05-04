@@ -37,6 +37,7 @@ import rl_env
 import numpy as np
 import rainbow_agent
 import tensorflow as tf
+import queue
 
 LENIENT_SCORE = False
 
@@ -161,12 +162,12 @@ def create_agent(environment, obs_stacker, agent_type='DQN'):
     ValueError: if an unknown agent type is requested.
   """
   if agent_type == 'DQN':
-    return dqn_agent.DQNAgent(observation_size=obs_stacker.observation_size(),
+    return dqn_agent.DQNAgent(observation_size=125 + obs_stacker.observation_size(),
                               num_actions=environment.num_moves(),
                               num_players=environment.players)
   elif agent_type == 'Rainbow':
     return rainbow_agent.RainbowAgent(
-        observation_size=obs_stacker.observation_size(),
+        observation_size=125 + obs_stacker.observation_size(),
         num_actions=environment.num_moves(),
         num_players=environment.players)
   else:
@@ -276,6 +277,38 @@ def parse_observations(observations, num_actions, obs_stacker):
 
   return current_player, legal_moves, observation_vector
 
+def get_current_agent_card_knowledge_probs(observation_vector):
+  '''return current agent card knowledge as probability vectors''' 
+  constructed_new_observation = []
+
+  card_knowledge_section_length_per_player = 5*(25+5+5)
+  previous_card_knowledge = observation_vector[-2*card_knowledge_section_length_per_player:-card_knowledge_section_length_per_player]
+
+  offset = 0
+  for i in range(5):
+    current_card_knowledge = previous_card_knowledge[offset:offset+25]
+    constructed_new_observation.append(current_card_knowledge/current_card_knowledge.sum())
+    offset += 35 # skip 10 bits I am not using
+
+  return np.concatenate(constructed_new_observation, axis=None)
+
+def replace_agent_b_observation_with_knowledge(observation_vector, knowledge_of_current_agent_card):
+  modified_observation_vector = observation_vector.copy()
+  modified_observation_vector[:125] = knowledge_of_current_agent_card
+  return modified_observation_vector
+
+def get_estimated_current_agent_cards(gradient_to_input_cards, knowledge_of_current_agent_card):
+  offset = 0
+  one_hot_cards = []
+  for i in range(5):
+    # subtract gradient from input, and choose max
+    updated_card_estimates = knowledge_of_current_agent_card[offset:offset + 25] - gradient_to_input_cards[offset:offset + 25]
+    one_hot_card = np.zeros(25)
+    one_hot_card[updated_card_estimates.argmax()] = 1
+    one_hot_cards.append(one_hot_card)
+    offset += 25
+  return np.concatenate(one_hot_cards, axis=None)
+
 
 def run_one_episode(agent, environment, obs_stacker):
   """Runs the agent on a single game of Hanabi in self-play mode.
@@ -293,7 +326,11 @@ def run_one_episode(agent, environment, obs_stacker):
   observations = environment.reset()
   current_player, legal_moves, observation_vector = (
       parse_observations(observations, environment.num_moves(), obs_stacker))
-  action = agent.begin_episode(current_player, legal_moves, observation_vector)
+  action = agent.begin_episode(current_player, legal_moves, np.append(np.zeros(125), observation_vector))
+
+  #actions_queue = queue.Queue(maxsize=2)
+  #actions_queue.put(0)  #JP: This might matter.
+  #actions_queue.put(action.item())
 
   is_done = False
   total_reward = 0
@@ -315,17 +352,40 @@ def run_one_episode(agent, environment, obs_stacker):
     step_number += 1
     if is_done:
       break
+
+    previous_observation_vector = observation_vector
+    previous_legal_moves = legal_moves
+
     current_player, legal_moves, observation_vector = (
         parse_observations(observations, environment.num_moves(), obs_stacker))
+
+    #action_from_2_moves_ago = action_queue.get()
+
+    previous_agent_cards = observation_vector[:125]
+    knowledge_of_current_agent_card = get_current_agent_card_knowledge_probs(observation_vector)
+    modified_observation_vector = replace_agent_b_observation_with_knowledge(observation_vector, knowledge_of_current_agent_card)
+
+    # after computing gradient, need to clear the graph? or is it enough not to update the graph?
+    gradient_to_input = agent.get_som_gradient(
+        1 - current_player, 
+        previous_legal_moves, 
+        np.append(previous_agent_cards, modified_observation_vector),
+        action.item()
+    )
+
+    estimated_current_agent_cards = get_estimated_current_agent_cards(gradient_to_input[:125], knowledge_of_current_agent_card)
+
     if current_player in has_played:
       action = agent.step(reward_since_last_action[current_player],
-                          current_player, legal_moves, observation_vector)
+                          current_player, legal_moves, np.append(estimated_current_agent_cards, observation_vector))
     else:
       # Each player begins the episode on their first turn (which may not be
       # the first move of the game).
       action = agent.begin_episode(current_player, legal_moves,
-                                   observation_vector)
+                                   np.append(estimated_current_agent_cards, observation_vector))
       has_played.add(current_player)
+
+    #actions_queue.put(action.item())
 
     # Reset this player's reward accumulator.
     reward_since_last_action[current_player] = 0
