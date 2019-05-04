@@ -108,8 +108,7 @@ int BoardSectionLength(const HanabiGame& game) {
   return game.MaxDeckSize() - game.NumPlayers() * game.HandSize() +  // deck
          game.NumColors() * game.NumRanks() +  // fireworks
          game.MaxInformationTokens() +         // info tokens
-         game.MaxLifeTokens() +                // life tokens // JP
-         game.NumColors() * game.NumRanks();   // JP: good touch principle
+         game.MaxLifeTokens();                 // life tokens
 }
 
 // Encode the board, including:
@@ -162,48 +161,6 @@ int EncodeBoard(const HanabiGame& game, const HanabiObservation& obs,
     (*encoding)[offset + i] = 1;
   }
   offset += game.MaxLifeTokens();
-
-  // JP: TODO: Good touch principle
-
-  // Knowledge for the Discard Pile has been lost, but we don't need them, technically. 
-  //for (const HanabiCard& card : obs.DiscardPile()) {
-    //if (card.ColorWasHinted() || card.RankWasHinted()){
-      //(*encoding)[offset + card.Color() * num_ranks + card.Rank()] = 1;
-	//}
-  //}
-
-  // What about from the fireworks?
-  // Umm, we don't need to know what fireworks cards have been hinted, either. Just need to know what are in the fireworks.
-  for (int c = 0; c < num_colors; ++c) {
-    // fireworks[color] is the number of successfully played <color> cards.
-    // If some were played, one-hot encode the highest (0-indexed) rank played
-    if (fireworks[c] > 0) {
-	  for (int r = 0; r < fireworks[c]; ++r) {
-        (*encoding)[offset + c * num_ranks + r] = 1;
-	  }
-    }
-  }
-
-  // From current hand (insufficient)
-  const std::vector<HanabiHand>& hands = obs.Hands();
-  assert(hands.size() == num_players);
-  for (int player = 0; player < num_players; ++player) {
-    const std::vector<HanabiHand::CardKnowledge>& knowledge =
-        hands[player].Knowledge();
-    const std::vector<HanabiCard>& cards = hands[player].Cards();
-
-	int num_cards = 0;
-    for (const HanabiHand::CardKnowledge& card_knowledge : knowledge) {
-      if (card_knowledge.ColorHinted() || card_knowledge.RankHinted()){
-	    const HanabiCard& card = cards[num_cards];
-        (*encoding)[offset + card.Color() * num_ranks + card.Rank()] = 1;
-	  }
-	  ++num_cards;
-	}
-
-  }
-
-  offset += num_colors * num_ranks;   // JP: good touch principle
 
   assert(offset - start_offset == BoardSectionLength(game));
   return offset - start_offset;
