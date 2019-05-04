@@ -316,14 +316,70 @@ def decode_action_in_card_space_to_hint_space(action, opponent_hand): # JP
   return 15 + card_rank
 
 def was_hint(decoded_action):
-  '''should work in all cases of standard game (5 cards in hand)'''
+  '''should work in all cases of standard game (5 cards in hand), decoded or not'''
   return decoded_action >= 10
+
+def is_rank_hint(decoded_action):
+  assert decoded_action >= 10, "this action is not a hint at all"
+  return decoded_action >= 15
 
 def hinted_cards(observation_vector):
   '''hint is given, it's the matter of figuring out how many'''
-  touched_cards = observation_vector[-a-5:-a]
+  hand_size = 5
+  bits_per_card = 25
+  num_players = 2
+  num_colors = 5
+  num_ranks = 5
+  section_length_afterwards = hand_size + bits_per_card + 2 + num_players * hand_size * (bits_per_card + num_colors + num_ranks)
+  touched_cards = observation_vector[-section_length_afterwards - 5 : -section_length_afterwards]
   assert touched_cards.sum() >= 1, "the previous action was hint but no cards were touched." # otherwise it will error in other steps anyways
   return touched_cards
+
+def construct_legal_moves_from_hinted_cards(my_hinted_cards, is_previous_action_rank_hint):
+  ''' limit possible outputs to the given hint type only '''
+  if is_previous_action_rank_hint:
+    offset = 15
+  else:
+    offset = 10
+
+  legal_hinted_cards_in_modified_action_space = []
+
+  for i, each in enumerate(my_hinted_cards):
+    if each:
+      legal_hinted_cards_in_modified_action_space.append(i + offset)
+
+  action_dim = 20 # hard-coding
+  new_legal_moves = np.full(action_dim, -float('inf'))
+  new_legal_moves[legal_hinted_cards_in_modified_action_space] = 0
+
+  return new_legal_moves
+
+def replace_current_agent_from_previous_observation_with_knowledge(previous_observation_vector, new_observation_vector):
+  ''' assuming everything else should be the same, simple way of rewriting observation of agent b from agent a's perspective. '''
+  new_previous_observation_vector = previous_observation_vector.copy()
+
+  constructed_new_observation = []
+  
+  card_knowledge_section_length_per_player = 5*(25+5+5)
+  previous_card_knowledge = new_observation_vector[-2*card_knowledge_section_length_per_player:-card_knowledge_section_length_per_player]
+
+  offset = 0
+  for i in range(5):
+    constructed_new_observation.append(previous_card_knowledge[offset:offset+25])
+    offset += 35 # skip 10 bits I am not using
+
+  new_previous_observation_vector[:125] = np.concatenate(constructed_new_observation, axis=None)
+
+  return new_previous_observation_vector
+
+def decode_intended_action(estimated_intended_action):
+  '''return SoM vector'''
+  assert 10 <= estimated_intended_action < 20, "estimated intended action is not hint in modified action space"
+  SoM_vector = np.zeros(5)
+  SoM_vector[estimated_intended_action % 5] = 1
+  return SoM_vector
+
+import queue
 
 def run_one_episode(agent, environment, obs_stacker):
   """Runs the agent on a single game of Hanabi in self-play mode.
@@ -345,7 +401,12 @@ def run_one_episode(agent, environment, obs_stacker):
   #np.set_printoptions(threshold=sys.maxsize)
   #print("observation_vector:", observation_vector)
 
+
   action = agent.begin_episode(current_player, legal_moves, np.append(observation_vector, np.zeros(5))) #JP: TODO: append to observation vector
+
+  actions_queue = queue.Queue(maxsize=2)
+  actions_queue.put(0)
+  actions_queue.put(action.item())
 
   is_done = False
   total_reward = 0
@@ -374,34 +435,39 @@ def run_one_episode(agent, environment, obs_stacker):
     if is_done:
       break
 
+    previous_observation_vector = observation_vector
     current_player, legal_moves, observation_vector = (
         parse_observations(observations, environment.num_moves(), obs_stacker))
 
+    action_from_2_moves_ago = actions_queue.get()
     # player 1 action was hint
     if was_hint(decoded_action):
-      SoM_vector = np.zeros(5)
-	  # if player 1 action was hint, how many cards it touched is embedded in player 2's observation vector
-      '''
+      #SoM_vector = np.zeros(5)
+      # if player 1 action was hint, how many cards it touched is embedded in player 2's observation vector
       my_hinted_cards = hinted_cards(observation_vector)
       if my_hinted_cards.sum() == 1:
         SoM_vector = my_hinted_cards
-	  else:
-	    # agent B makes estimates for agent A
+      else:
+        # agent B makes estimates for agent A
         agent.eval_mode = True
 
-		hint_type = color_or_rank_hint(decoded_action)
-		hinted_cards_in_action_space = (my_hinted_cards, hint_type)
-		reconstructed_observation_vector = # Just use the observation vector of agent 1, but replace the opponent cards with estimates of agent 2
-	    my_previous_intention = #if agent 2's previous action was hint, then use that information about which card it was for ... .
-		estimated_intended_action = agent.begin_episode(
-			1 - current_player, 
-			hinted_cards_in_action_space, 
-			np.append(reconstructed_observation_vector, my_previous_intention)
-		)
+        is_previous_action_rank_hint = is_rank_hint(decoded_action)
+        legal_hinted_cards_in_modified_action_space = construct_legal_moves_from_hinted_cards(my_hinted_cards, is_previous_action_rank_hint)
+
+        current_player_observation = observations['player_observations'][current_player] #JP
+        reconstructed_observation_vector = replace_current_agent_from_previous_observation_with_knowledge(previous_observation_vector, observation_vector)# Just use the observation vector of agent 1, but replace the opponent cards with estimates of agent 2
+        if was_hint(action_from_2_moves_ago):
+          my_previous_intention = decode_intended_action(action_from_2_moves_ago) #if agent 2's previous action was hint, then use that information about which card it was for ... .
+        else:
+          my_previous_intention = np.zeros(5)
+        estimated_intended_action = agent.begin_episode(
+            1 - current_player, 
+            legal_hinted_cards_in_modified_action_space, 
+            np.append(reconstructed_observation_vector, my_previous_intention)
+        )
         SoM_vector = decode_intended_action(estimated_intended_action)
 
         agent.eval_mode = False
-      '''
     else:
       SoM_vector = np.zeros(5)
 
@@ -415,6 +481,8 @@ def run_one_episode(agent, environment, obs_stacker):
       action = agent.begin_episode(current_player, legal_moves,
                                    np.append(observation_vector, SoM_vector))  #JP: TODO: this should use SoM
       has_played.add(current_player)
+
+    actions_queue.put(action.item())
 
     # Reset this player's reward accumulator.
     reward_since_last_action[current_player] = 0
