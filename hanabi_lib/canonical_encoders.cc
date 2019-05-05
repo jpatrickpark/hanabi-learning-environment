@@ -184,15 +184,24 @@ int EncodeBoard(const HanabiGame& game, const HanabiObservation& obs,
     }
   }
 
-  // From current hand (insufficient)
+  // From current hand
   const std::vector<HanabiHand>& hands = obs.Hands();
   assert(hands.size() == num_players);
-  for (int player = 0; player < num_players; ++player) {
+  const std::vector<HanabiHand::CardKnowledge>& knowledge =
+        hands[0].Knowledge();
+  int num_cards = 0;
+  for (const HanabiHand::CardKnowledge& card_knowledge : knowledge) {
+    if (card_knowledge.ColorHinted() && card_knowledge.RankHinted()){
+      (*encoding)[offset + card_knowledge.Color() * num_ranks + card_knowledge.Rank()] = 1;
+	}
+  }
+  ++num_cards;
+  for (int player = 1; player < num_players; ++player) {
     const std::vector<HanabiHand::CardKnowledge>& knowledge =
         hands[player].Knowledge();
     const std::vector<HanabiCard>& cards = hands[player].Cards();
 
-	int num_cards = 0;
+	num_cards = 0;
     for (const HanabiHand::CardKnowledge& card_knowledge : knowledge) {
       if (card_knowledge.ColorHinted() || card_knowledge.RankHinted()){
 	    const HanabiCard& card = cards[num_cards];
