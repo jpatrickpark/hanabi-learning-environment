@@ -373,7 +373,7 @@ def run_one_episode(agent, environment, obs_stacker):
         action.item()
     )
 
-    estimated_current_agent_cards = get_estimated_current_agent_cards(gradient_to_input[:125], knowledge_of_current_agent_card)
+    estimated_current_agent_cards = get_estimated_current_agent_cards(gradient_to_input[125:250], knowledge_of_current_agent_card)
 
     if current_player in has_played:
       action = agent.step(reward_since_last_action[current_player],
